@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>สแกนเวลาเข้า-ออกงาน</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+<style>
+  body { font-family:'Tahoma', sans-serif; max-width:900px; margin:20px auto; padding:15px; background:#f4f6f8; }
+  h1 { text-align:center; color:#2c3e50; font-size:22px; }
+  .box { background:#fff; padding:18px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.1); margin-bottom:18px; }
+  #reader { width:100%; max-width:320px; margin:0 auto; }
+  .info { text-align:center; font-size:18px; margin-top:10px; line-height:2; }
+  .info b { color:#2980b9; }
+  .statusTag { display:inline-block; padding:5px 16px; border-radius:20px; font-weight:bold; color:#fff; font-size:16px; background:#95a5a6; }
+  .in { background:#27ae60; }
+  .out { background:#c0392b; }
+  .bigBtn { display:block; width:100%; padding:18px; font-size:20px; font-weight:bold; background:#27ae60; color:#fff; border:none; border-radius:12px; cursor:pointer; margin-top:16px; }
+  .bigBtn:disabled { background:#bdc3c7; cursor:not-allowed; }
+  .blue { background:#2980b9; color:#fff; border:none; border-radius:8px; padding:10px 16px; cursor:pointer; margin:4px; font-size:14px; }
+  table { width:100%; border-collapse:collapse; margin-top:10px; font-size:13px; }
+  th, td { border:1px solid #ddd; padding:6px; text-align:center; }
+  th { background:#ecf0f1; }
+  .center { text-align:center; }
+  #loadingMsg { text-align:center; color:#e67e22; font-size:16px; font-weight:bold; margin-top:10px; }
+  .placeholder { color:#95a5a6; }
+  .scrollWrap { overflow-x:auto; }
+  .net { font-weight:bold; color:#27ae60; }
+  .totalRow td { background:#fdf2e9; font-weight:bold; }
+  .monthPick { text-align:center; margin-bottom:8px; }
+  .monthPick input { padding:6px; font-size:15px; border:1px solid #ccc; border-radius:6px; }
+</style>
+</head>
+<body>
+  <h1>ระบบสแกนเวลาเข้า-ออกงาน</h1>
+
+  <div class="box">
+    <div id="reader"></div>
+    <div class="info">
+      ชื่อพนักงาน: <b id="empName" class="placeholder">รอสแกน...</b><br>
+      ตำแหน่ง: <b id="empPosition">-</b><br>
+      เวลา: <b id="scanTime">-</b><br>
+      <span id="scanStatus" class="statusTag">-</span>
+    </div>
+    <button class="bigBtn" id="saveBtn" onclick="addRecord()" disabled>✅ ยืนยันบันทึก</button>
+    <div id="loadingMsg"></div>
+  </div>
+
+  <div class="box" id="summaryBox">
+    <h3 class="center" style="margin:0 0 10px;">สรุปยอดสุทธิรายคน</h3>
+    <div class="monthPick">
+      เดือน: <input type="month" id="sumMonth" onchange="renderSummary()">
+    </div>
+    <div class="scrollWrap">
+      <table id="summaryTable">
+        <thead>
+          <tr>
+            <th>ชื่อ</th><th>ตำแหน่ง</th><th>จำนวนวัน</th>
+            <th>ค่าแรงปกติ</th><th>ค่าโอที</th><th>ค่าแรงพิเศษ</th><th>หักค่าแรง</th><th>ยอดสุทธิ</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="box">
+    <h3 class="center" style="margin:0 0 10px;">รายการล่าสุด</h3>
+    <div class="scrollWrap">
+      <table id="recordTable">
+        <thead>
+          <tr><th>วันที่</th><th>ชื่อ</th><th>ตำแหน่ง</th><th>เข้างาน</th><th>ออกงาน</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="center">
+    <button class="blue" onclick="loadRecords()">โหลดข้อมูลล่าสุด</button>
+    <button class="blue" onclick="saveImage()">บันทึกสรุปยอดเป็นไฟล์ภาพ</button>
+  </div>
+
+<script>
+// ⚠️ วาง Web app URL ตรงนี้
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwCVtq5Uei0VnTcdlj-qQMSXFeYsXxSCtzV3nMRtOn-Y1aIWWBhBQsxsHo5zsrHJbp7/exec";
+
+let scannedKey = null;
+let scannedPos = "";
+let currentType = null;
+let allRows = [];
+
+const html5QrCode = new Html5Qrcode("reader");
+html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 230 }, onScanSuccess);
+
+async function onScanSuccess(decodedText) {
+  if (!decodedText.startsWith("NAME:")) return;
+  html5QrCode.pause();
+
+  // อ่าน QR รูปแบบ NAME:fah|POS:serve_am
+  const parts = decodedText.split("|");
+  scannedKey = parts[0].replace("NAME:", "").trim().toLowerCase();
+  scannedPos = "";
+  parts.forEach(p => { if (p.startsWith("POS:")) scannedPos = p.substring(4).trim(); });
+
+  document.getElementById('scanTime').innerText = new Date().toLocaleString('th-TH');
+  document.getElementById('loadingMsg').innerText = 'กำลังตรวจสอบข้อมูล...';
+
+  try {
+    const url = SCRIPT_URL + "?action=checkStatus&empKey=" + encodeURIComponent(scannedKey) +
+                "&pos=" + encodeURIComponent(scannedPos);
+    const result = await (await fetch(url)).json();
+    currentType = result.nextType;
+
+    const nameEl = document.getElementById('empName');
+    nameEl.innerText = result.name;
+    nameEl.classList.remove('placeholder');
+    document.getElementById('empPosition').innerText = result.position;
+
+    const tag = document.getElementById('scanStatus');
+    tag.innerText = currentType;
+    tag.className = 'statusTag ' + (currentType === 'เข้างาน' ? 'in' : 'out');
+
+    document.getElementById('loadingMsg').innerText = '';
+    document.getElementById('saveBtn').disabled = false;
+  } catch (err) {
+    alert('เกิดข้อผิดพลาดในการเชื่อมต่อ');
+    resetForNextScan();
+  }
+}
+
+async function addRecord() {
+  document.getElementById('loadingMsg').innerText = 'กำลังบันทึก...';
+  document.getElementById('saveBtn').disabled = true;
+  try {
+    await fetch(SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ empKey: scannedKey, pos: scannedPos, type: currentType })
+    });
+    document.getElementById('loadingMsg').innerText = '✅ บันทึก' + currentType + 'สำเร็จ!';
+    loadRecords();
+    setTimeout(resetForNextScan, 2000);
+  } catch (err) {
+    document.getElementById('loadingMsg').innerText = '❌ บันทึกไม่สำเร็จ';
+    document.getElementById('saveBtn').disabled = false;
+  }
+}
+
+function resetForNextScan() {
+  scannedKey = null;
+  scannedPos = "";
+  currentType = null;
+  const nameEl = document.getElementById('empName');
+  nameEl.innerText = 'รอสแกน...';
+  nameEl.classList.add('placeholder');
+  document.getElementById('empPosition').innerText = '-';
+  document.getElementById('scanTime').innerText = '-';
+  document.getElementById('scanStatus').innerText = '-';
+  document.getElementById('scanStatus').className = 'statusTag';
+  document.getElementById('saveBtn').disabled = true;
+  document.getElementById('loadingMsg').innerText = '';
+  try { html5QrCode.resume(); } catch (e) {}
+}
+
+function num(v) {
+  const n = parseFloat(String(v).replace(/,/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+function fmt(n) {
+  return n.toLocaleString('th-TH', { maximumFractionDigits: 2 });
+}
+
+async function loadRecords() {
+  try {
+    allRows = await (await fetch(SCRIPT_URL)).json();
+    let html = '';
+    for (let i = allRows.length - 1; i >= Math.max(1, allRows.length - 20); i--) {
+      const r = allRows[i];
+      html += `<tr><td>${r[0]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td></tr>`;
+    }
+    document.querySelector('#recordTable tbody').innerHTML = html;
+    renderSummary();
+  } catch (err) {}
+}
+
+function renderSummary() {
+  const month = document.getElementById('sumMonth').value;
+  const map = {};
+  for (let i = 1; i < allRows.length; i++) {
+    const r = allRows[i];
+    if (!r[1]) continue;
+    if (month && !String(r[0]).startsWith(month)) continue;
+    if (!map[r[1]]) map[r[1]] = { name: r[2], pos: r[3], days: 0, g: 0, h: 0, x: 0, j: 0 };
+    const m = map[r[1]];
+    m.days++;
+    m.g += num(r[6]); m.h += num(r[7]); m.x += num(r[8]); m.j += num(r[9]);
+  }
+
+  const tbody = document.querySelector('#summaryTable tbody');
+  const keys = Object.keys(map);
+  if (keys.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="placeholder">ยังไม่มีข้อมูลในเดือนนี้</td></tr>';
+    return;
+  }
+  let html = '', total = 0;
+  keys.forEach(k => {
+    const m = map[k];
+    const net = m.g + m.h + m.x - m.j;
+    total += net;
+    html += `<tr><td>${m.name}</td><td>${m.pos}</td><td>${m.days}</td>
+      <td>${fmt(m.g)}</td><td>${fmt(m.h)}</td><td>${fmt(m.x)}</td><td>${fmt(m.j)}</td>
+      <td class="net">${fmt(net)}</td></tr>`;
+  });
+  html += `<tr class="totalRow"><td colspan="7">รวมทั้งหมด</td><td>${fmt(total)}</td></tr>`;
+  tbody.innerHTML = html;
+}
+
+function saveImage() {
+  html2canvas(document.getElementById('summaryBox')).then(canvas => {
+    const link = document.createElement('a');
+    link.download = 'สรุปยอด_' + document.getElementById('sumMonth').value + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  });
+}
+
+window.onload = function () {
+  const d = new Date();
+  document.getElementById('sumMonth').value =
+    d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  loadRecords();
+};
+</script>
+</body>
+</html>
